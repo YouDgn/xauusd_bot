@@ -22,7 +22,7 @@ gymnasium>=0.29.0
 
 # --- Data Science ---
 pandas>=2.0.0
-pandas-ta>=0.3.14b
+ta>=0.11.0
 scikit-learn>=1.3.0
 scipy>=1.11.0
 
@@ -32,7 +32,7 @@ feedparser>=6.0.10
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 transformers>=4.35.0
-torch-sentiment-analysis
+vaderSentiment>=3.3.2
 
 # --- Visualisation Console ---
 rich>=13.6.0
