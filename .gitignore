@@ -61,7 +61,7 @@ temp/
 # Models & Checkpoints (TOO LARGE)
 # ============================================================
 models/checkpoints/
-models/*.pt
+# models/*.pt  ← Commenté : on track le modèle final avec Git LFS
 models/*.pth
 *.pt
 *.pth
