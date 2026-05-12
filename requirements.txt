@@ -16,7 +16,7 @@ MetaTrader5>=5.0.45
 
 # --- Deep Learning & RL ---
 torch>=2.0.0
-torch-directml>=0.2.0
+# torch-directml>=0.2.0  # À décommenter après upgrade à Python 3.12
 numpy>=1.24.0
 gymnasium>=0.29.0
 
@@ -33,6 +33,10 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 transformers>=4.35.0
 vaderSentiment>=3.3.2
+
+# --- Web Dashboard ---
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
 
 # --- Visualisation Console ---
 rich>=13.6.0

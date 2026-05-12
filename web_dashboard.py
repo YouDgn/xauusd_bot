@@ -961,21 +961,30 @@ let pnlHistory = [];
 let reconnectTimer = null;
 
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  const wsUrl = `ws://${location.host}/ws`;
+  console.log(`🔌 Tentative connexion WebSocket: ${wsUrl}`);
+  ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
+    console.log('✅ WebSocket CONNECTÉ');
     document.getElementById('wsDot').classList.add('connected');
     document.getElementById('wsLabel').textContent = 'Connecté';
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    addLog('✅ Connecté au dashboard');
   };
 
   ws.onclose = () => {
+    console.log('❌ WebSocket FERMÉ');
     document.getElementById('wsDot').classList.remove('connected');
     document.getElementById('wsLabel').textContent = 'Déconnecté';
     reconnectTimer = setTimeout(connect, 3000);
   };
 
-  ws.onerror = () => ws.close();
+  ws.onerror = (event) => {
+    console.error('❌ WebSocket ERROR:', event);
+    addLog('⚠️ Erreur WebSocket - réessai dans 3s...');
+    ws.close();
+  };
 
   ws.onmessage = (e) => {
     try { updateDashboard(JSON.parse(e.data)); }
@@ -1312,7 +1321,11 @@ function saveTpanel() {
 
 function sendRaw(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    console.log('📤 Envoi:', JSON.stringify(obj));
     ws.send(JSON.stringify(obj));
+  } else {
+    console.error('❌ WebSocket non connecté (état:', ws?.readyState, ')');
+    addLog('⚠️ Erreur: WebSocket non connecté');
   }
 }
 
@@ -1354,12 +1367,26 @@ class WebDashboardServer:
         async def root():
             return DASHBOARD_HTML
 
+        @app.get("/settings")
+        async def get_settings():
+            """Retourne les paramètres actuels."""
+            try:
+                import config as _cfg
+                return {
+                    "capital": getattr(_cfg, "INITIAL_CAPITAL", 10000),
+                    "rr": getattr(_cfg, "TAKE_PROFIT_ATR_MULT", 3.0) / max(getattr(_cfg, "STOP_LOSS_ATR_MULT", 1.0), 0.001),
+                    "lot": getattr(_cfg, "MANUAL_LOT_SIZE", 0.05),
+                    "protection": getattr(_cfg, "DAILY_MAX_LOSS", 0.05) * 100,
+                }
+            except Exception as e:
+                logger.error(f"get_settings error: {e}")
+                return {"capital": 10000, "rr": 3.0, "lot": 0.05, "protection": 5.0}
 
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
             self._clients.add(websocket)
-            logger.info(f"Dashboard: nouveau client connecté ({len(self._clients)} total)")
+            logger.info(f"✅ Dashboard: nouveau client WebSocket connecté ({len(self._clients)} total)")
 
             # Envoyer le statut actuel au nouveau client
             bot = self.bot_ref
@@ -1377,7 +1404,7 @@ class WebDashboardServer:
                 pass
             finally:
                 self._clients.discard(websocket)
-                logger.info(f"Dashboard: client déconnecté ({len(self._clients)} restants)")
+                logger.info(f"❌ Dashboard: client déconnecté ({len(self._clients)} restants)")
 
         return app
 
@@ -1385,7 +1412,7 @@ class WebDashboardServer:
         """Traite les commandes envoyées depuis le dashboard."""
         cmd = data.get("command")
         bot = self.bot_ref
-        logger.info(f"Commande reçue : {cmd} | bot={bot is not None}")
+        logger.info(f"🔹 COMMAND REÇUE: {cmd} | data={data} | bot={bot is not None}")
 
         if cmd == "start":
             is_running = bot and getattr(bot, "_run_event", None) and bot._run_event.is_set()
@@ -1429,10 +1456,19 @@ class WebDashboardServer:
             login    = data.get("login", 0)
             password = data.get("password", "")
             server   = data.get("server", "")
+            logger.info(f"MT5 login tentative: {login} @ {server}")
+            
             try:
                 import config as _cfg
                 import MetaTrader5 as _mt5
-                
+            except ImportError as e:
+                logger.error(f"MetaTrader5 non installé: {e}")
+                await websocket.send_text(json.dumps({
+                    "login_error": "MetaTrader5 non installé"
+                }))
+                return
+            
+            try:
                 # Nettoyer les données reçues
                 login = int(login) if login else 0
                 password = str(password).strip() if password else ""
@@ -1445,36 +1481,41 @@ class WebDashboardServer:
                     return
                 
                 # Test connexion rapide
+                logger.info(f"Initialisation MT5...")
                 if not _mt5.initialize():
+                    error = _mt5.last_error()
+                    msg = f"Init MT5 échouée: {error}" if error else "Impossible d'initialiser MT5"
+                    logger.error(msg)
                     await websocket.send_text(json.dumps({
-                        "login_error": "Impossible d'initialiser MT5"
+                        "login_error": msg
                     }))
                     return
                 
-                try:
-                    ok = _mt5.login(login=login, password=password, server=server)
-                    if ok:
-                        _cfg.MT5_LOGIN    = login
-                        _cfg.MT5_PASSWORD = password
-                        _cfg.MT5_SERVER   = server
-                        _mt5.shutdown()
-                        await websocket.send_text(json.dumps({"login_ok": True}))
-                        logger.info(f"Login MT5 OK — compte {login} sur {server}")
-                    else:
-                        error_code = _mt5.last_error()
-                        error_msg = f"Erreur MT5: {error_code[0]} - {error_code[1]}" if error_code else "Identifiants invalides"
-                        _mt5.shutdown()
-                        await websocket.send_text(json.dumps({"login_error": error_msg}))
-                        logger.warning(f"Login MT5 échoué pour {login}: {error_msg}")
-                except Exception as ex:
+                logger.info(f"Tentative login: {login}@{server}")
+                ok = _mt5.login(login=login, password=password, server=server)
+                
+                if ok:
+                    _cfg.MT5_LOGIN    = login
+                    _cfg.MT5_PASSWORD = password
+                    _cfg.MT5_SERVER   = server
                     _mt5.shutdown()
-                    await websocket.send_text(json.dumps({
-                        "login_error": f"Erreur connexion: {str(ex)[:60]}"
-                    }))
-            except Exception as e:
-                logger.error(f"mt5_login error: {e}")
+                    await websocket.send_text(json.dumps({"login_ok": True}))
+                    logger.info(f"✅ Login MT5 OK — compte {login} sur {server}")
+                else:
+                    error_code = _mt5.last_error()
+                    error_msg = f"Erreur MT5 ({error_code[0]}): {error_code[1]}" if error_code else "Identifiants invalides"
+                    _mt5.shutdown()
+                    logger.error(f"❌ Login échoué: {error_msg}")
+                    await websocket.send_text(json.dumps({"login_error": error_msg}))
+                    
+            except Exception as ex:
+                logger.exception(f"Exception during MT5 login: {ex}")
+                try:
+                    _mt5.shutdown()
+                except:
+                    pass
                 await websocket.send_text(json.dumps({
-                    "login_error": f"Erreur: {str(e)[:60]}"
+                    "login_error": f"Erreur: {str(ex)[:80]}"
                 }))
 
         elif cmd == "set_params":
@@ -1541,22 +1582,36 @@ class WebDashboardServer:
             logger.error("uvicorn non installé. pip install uvicorn")
             return
 
+        # Supprimer les logs asyncio bruyants sur Windows
+        import logging as _logging
+        _logging.getLogger("asyncio").setLevel(_logging.WARNING)
+
         app = self._build_app()
         if app is None:
+            logger.error("Impossible de construire l'app FastAPI")
             return
 
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-
-        config = uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=self.port,
-            log_level="error",
-            loop="asyncio",
-        )
-        server = uvicorn.Server(config)
-        self._loop.run_until_complete(server.serve())
+        try:
+            # Créer une boucle d'événements dédiée pour ce thread
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            
+            logger.info(f"🚀 Démarrage serveur FastAPI sur 0.0.0.0:{self.port}...")
+            config = uvicorn.Config(
+                app,
+                host="0.0.0.0",  # Écouter sur toutes les interfaces
+                port=self.port,
+                log_level="warning",
+                access_log=False,
+                loop="asyncio",
+            )
+            server = uvicorn.Server(config)
+            logger.info(f"✅ Serveur FastAPI lancé")
+            self._loop.run_until_complete(server.serve())
+        except Exception as e:
+            logger.error(f"❌ Erreur démarrage serveur: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _open_browser(self):
         """Ouvre le dashboard dans le navigateur par défaut."""
